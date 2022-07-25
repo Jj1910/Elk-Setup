@@ -1,0 +1,187 @@
+KIBANA AND ELASTIC USER: kibadmin
+Elasticsearch
+
+
+wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo gpg --dearmor -o /usr/share/keyrings/elasticsearch-keyring.gpg
+
+
+sudo apt install apt-transport-https
+
+
+echo "deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-8.x.list
+
+
+sudo apt update && sudo apt install elasticsearch
+
+
+sudo nano /etc/elasticsearch/elasticsearch.yml
+
+
+*** Uncomment port 9200 Change http.host to localhost and disable ssl requirements and enrollment token****
+
+
+sudo /bin/systemctl daemon-reload
+sudo /bin/systemctl enable elasticsearch.service
+sudo /bin/systemctl start elasticsearch.service
+
+
+Add Kibadmin to ElasticSearch to pass credentials from Basic Auth
+
+
+sudo /usr/share/elasticsearch/bin/elasticsearch-users useradd kibadmin -r superuser
+
+
+curl -u kibadmin:password Localhost:9200 Test internal access to Elasticsearch
+
+
+Kibana
+
+
+sudo apt install kibana
+
+
+usr/share/elasticsearch/bin/elasticsearch-reset-password -u kibana_system --auto
+
+
+sudo nano /etc/kibana/kibana.yml
+
+
+****Uncomment Port 5601 uncomment elasticsearch.hosts and add elasticsearch credentials for kibana_system user above and add network host to device IP or locahost if using proxy****
+
+
+sudo /bin/systemctl daemon-reload
+sudo /bin/systemctl enable kibana.service
+sudo /bin/systemctl start kibana.service
+
+
+NGINX Reverse Proxy
+
+
+sudo apt -y install nginx
+
+
+sudo -v
+
+
+echo "kibadmin:`openssl passwd -apr1`" | sudo tee -a /etc/nginx/htpasswd.users
+
+
+sudo mv /etc/nginx/sites-available/default /etc/nginx/sites-available/original_backup_default
+
+
+sudo nano /etc/nginx/sites-available/default
+
+
+server {
+  listen 80;
+
+
+  server_name 10.0.100.3;
+
+
+  location / {
+    proxy_pass http://localhost:5601;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection 'upgrade';
+    proxy_set_header Host $host;
+    proxy_cache_bypass $http_upgrade;
+    auth_basic "Restricted Content";
+    auth_basic_user_file htpasswd.users;
+  }
+}
+
+
+sudo nano /etc/nginx/nginx.conf
+
+
+****Change last include to be include /etc/nginx/sites-enabled/default and add the following to the very bottom****
+
+
+stream{
+  server {
+    listen 5045;
+
+
+    proxy_pass localhost:5044;
+    }
+}
+
+
+ls -la /etc/nginx/sites-available/
+
+
+sudo nginx -t
+
+
+sudo systemctl restart nginx
+
+
+Logstash
+
+
+sudo apt install logstash
+
+
+
+
+sudo nano /etc/logstash/conf.d/02-beats-input.conf
+
+
+input {
+  beats {
+    port => 5044
+    add_field => { "[@metadata][source]" => "winlogbeat" }
+  }
+}
+sudo nano /etc/logstash/conf.d/50-elasticsearch-output.conf
+
+
+output {
+  if [@metadata][source] == "winlogbeat"{
+    elasticsearch {
+      hosts => ["localhost:9200"]
+        user => “kibadmin”
+      password => “password”
+      sniffing => true
+      manage_template => false
+      index => "%{[@metadata][beat]}-%{+YYYY.MM.dd}"
+      document_type => "%{[@metadata][type]}"
+    }
+  }
+}
+
+
+sudo systemctl enable logstash
+sudo systemctl start logstash
+
+
+tail -f /var/log/logstash/logstash-plain.log
+
+
+Sysmon and Winlogbeat setup
+
+
+Download Sysmon, Sysmon-modular, and winlogbeat
+
+
+PS : . .\Merge-SysmonXml.ps1
+
+
+PS : Merge-AllSysmonXml -Path ( Get-ChildItem '[0-9]*\*.xml') -AsString | Out-File sysmonconfig.xml
+
+PS : sysmon.exe -accepteula -i sysmonconfig.xml
+
+Edit original Winlogbeat.yml to comment all services except logstash uncomment output.logstash and edit the hosts DO NOT USE SSL IN LAB
+
+winlogbeat.exe -c winlogbeat.yml -e
+
+Enable Computer Config\Windows Settings\Security Settings\Advanced Audit Policies
+
+Security Settings\Local Policies\Security Options\Audit: Force Audit
+
+Administrative Templates\System\Audit Process Creation
+
+Administrative Templates\Windows Components\Windows Powershell\Module Logging * Script Block Logging
+
+Enable all tasks settings in task scheduler
